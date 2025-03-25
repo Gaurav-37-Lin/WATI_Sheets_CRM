@@ -69,6 +69,9 @@ FLOW_COLUMNS = {
 # HELPER FUNCTIONS
 ##########################################################
 def remove_emoji(text):
+    """
+    Removes emoji characters from text.
+    """
     if not isinstance(text, str):
         return text
     pattern = re.compile("[" 
@@ -80,14 +83,24 @@ def remove_emoji(text):
     return pattern.sub(r'', text)
 
 def is_greeting(text):
+    """
+    Checks if text is a generic greeting like "hi", "hello", etc.
+    """
     greetings = {"hi", "hello", "hey", "greetings"}
     normalized = re.sub(r'[^\w\s]', '', text.lower()).strip()
     return normalized in greetings
 
 def filter_greetings(msgs):
+    """
+    Removes greeting messages from the list.
+    """
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file(file_path):
+    """
+    Parses a .txt chat file where each line is in the format:
+      [timestamp] Sender: Message
+    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -110,6 +123,10 @@ def parse_chat_file(file_path):
     return messages
 
 def split_sessions(messages, gap_threshold=600):
+    """
+    Splits messages into sessions if a time gap (in seconds) exceeds gap_threshold.
+    Default is 600s (10 minutes).
+    """
     sessions = []
     current = []
     for i, msg in enumerate(messages):
@@ -127,6 +144,10 @@ def split_sessions(messages, gap_threshold=600):
     return sessions
 
 def detect_flow(main_sel, intro_sel):
+    """
+    Infers the flow based on the user's main selection and introduction selection.
+    E.g., "RentTenant", "RentOwner", "BuyBuyer", "BuySeller", etc.
+    """
     main_sel = main_sel.lower()
     intro_sel = intro_sel.lower()
     flow = None
@@ -149,9 +170,16 @@ def detect_flow(main_sel, intro_sel):
     return flow
 
 def validate_numeric(value):
+    """
+    Returns True if the string is purely digits.
+    """
     return bool(re.fullmatch(r'\d+', value))
 
 def extract_valid_response(texts, start_index, validate_func):
+    """
+    Tries to find the first text in 'texts' after 'start_index' that passes 'validate_func'.
+    Returns (valid_response, new_index, wrong_responses).
+    """
     wrong = []
     i = start_index
     while i < len(texts):
@@ -167,8 +195,14 @@ def extract_valid_response(texts, start_index, validate_func):
 # JOURNEY EXTRACTION
 ##########################################################
 def extract_journeys_from_session(session, file_name):
+    """
+    Splits a session into one or more "journeys" based on the bot prompt
+    "How can we assist you today?" Then maps user inputs to the relevant flow fields.
+    """
     journeys = []
     journey_start_indices = []
+
+    # Look for the Bot's prompt "how can we assist you today"
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
@@ -177,22 +211,25 @@ def extract_journeys_from_session(session, file_name):
         return journeys
 
     for k, start_idx in enumerate(journey_start_indices):
-        end_idx = journey_start_indices[k+1] if k+1 < len(journey_start_indices) else len(session)
+        end_idx = journey_start_indices[k+1] if (k+1 < len(journey_start_indices)) else len(session)
         segment_msgs = session[start_idx:end_idx]
+        # Non-bot messages after the prompt
         non_bot = [msg for msg in segment_msgs if msg["sender"].lower() != "bot"]
         if not non_bot:
             continue
         texts = [remove_emoji(msg["message"]).strip() for msg in non_bot]
         texts = filter_greetings(texts)
-        # For testing, require at least 1 non-bot message (adjust as needed)
+
+        # For demonstration, we require at least 1 non-bot message (main_sel).
+        # You can revert this to 2 if you want more complete data.
         if len(texts) < 1:
             continue
+
         main_sel = texts[0]
         intro_sel = texts[1] if len(texts) > 1 else ""
-        flow = detect_flow(main_sel, intro_sel)
-        if not flow:
-            flow = "Unknown"
+        flow = detect_flow(main_sel, intro_sel) or "Unknown"
         username = non_bot[0]["sender"]
+
         journey_record = {
             "file": file_name,
             "username": username,
@@ -204,9 +241,13 @@ def extract_journeys_from_session(session, file_name):
             "intro_selection": intro_sel,
             "extra_responses": ""
         }
-        pointer = 2
+
+        pointer = 2  # we used up texts[0] and texts[1] already
+
+        # Flow-specific data mapping:
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
+
         elif flow == "RentTenant":
             if pointer < len(texts):
                 journey_record["rent_tenant_btn_city"] = texts[pointer]
@@ -232,6 +273,7 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["rent_tenant_btn_est_move_in"] = texts[pointer]
                 pointer += 1
+
         elif flow == "RentOwner":
             if pointer < len(texts):
                 journey_record["rent_owner_btn_city"] = texts[pointer]
@@ -251,6 +293,7 @@ def extract_journeys_from_session(session, file_name):
                 journey_record["rent_owner_txt_rent_expectation_correct"] = valid_expect
                 journey_record["rent_owner_txt_rent_expectation_wrong"] = "; ".join(wrongs) if wrongs else None
                 pointer = new_ptr
+
         elif flow == "BuyBuyer":
             if pointer < len(texts):
                 apt_size = texts[pointer]
@@ -270,6 +313,7 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["buy_buyer_txt_email"] = texts[pointer]
                 pointer += 1
+
         elif flow == "BuySeller":
             if pointer < len(texts):
                 apt_size = texts[pointer]
@@ -289,6 +333,7 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["buy_seller_txt_email"] = texts[pointer]
                 pointer += 1
+
         elif flow == "ChannelPartner":
             if pointer < len(texts):
                 journey_record["cp_mode_of_operation"] = texts[pointer]
@@ -311,12 +356,18 @@ def extract_journeys_from_session(session, file_name):
                 if pointer < len(texts):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
+
+        # If there are leftover user messages
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
         journeys.append(journey_record)
+
     return journeys
 
 def process_file(file_path):
+    """
+    Parses a single .txt file and extracts all journeys within.
+    """
     messages = parse_chat_file(file_path)
     if not messages:
         return []
@@ -329,7 +380,9 @@ def process_file(file_path):
     return file_records
 
 def process_all_files():
-    """Collects all journeys from every .txt file in CHAT_FOLDER."""
+    """
+    Processes all .txt files in CHAT_FOLDER and returns a list of journey records.
+    """
     all_records = []
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
     print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER), flush=True)
@@ -344,13 +397,14 @@ def process_all_files():
 ##########################################################
 def post_journey_to_apps_script(journey):
     """
-    Sends one journey as JSON to the Apps Script Web App endpoint.
-    The doPost(e) function in Apps Script should parse this and append a row.
+    Sends one journey dict as JSON to the Apps Script Web App endpoint.
+    Convert timestamps to ISO strings if needed to avoid JSON serialization errors.
     """
-    # Convert Timestamp objects to ISO format strings, if needed.
+    # Convert any Timestamp or datetime to string (ISO format)
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
+
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
         print("Response status code:", response.status_code, flush=True)
@@ -371,6 +425,11 @@ def post_journey_to_apps_script(journey):
         print(f"Exception posting to Apps Script: {e}", flush=True)
 
 def main():
+    """
+    For manual or local testing:
+      - Reads all log files, extracts journeys,
+      - and posts them to your Apps Script endpoint.
+    """
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records), flush=True)
     for journey in records:
@@ -378,3 +437,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
