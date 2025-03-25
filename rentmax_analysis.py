@@ -3,10 +3,11 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests  # For posting data to the Apps Script endpoint
+import requests
 
-# Use the same folder for logs as in app.py.
+# Where your webhook writes .txt logs
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
+# The URL for your deployed Apps Script Web App
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
 ##########################################################
@@ -169,7 +170,7 @@ def extract_valid_response(texts, start_index, validate_func):
 def extract_journeys_from_session(session, file_name):
     journeys = []
     journey_start_indices = []
-    # Look for the bot prompt "how can we assist you today"
+    # Look for the Bot prompt
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
@@ -178,15 +179,17 @@ def extract_journeys_from_session(session, file_name):
         return journeys
 
     for k, start_idx in enumerate(journey_start_indices):
-        end_idx = journey_start_indices[k+1] if k+1 < len(journey_start_indices) else len(session)
+        end_idx = journey_start_indices[k+1] if (k+1 < len(journey_start_indices)) else len(session)
         segment_msgs = session[start_idx:end_idx]
         non_bot = [msg for msg in segment_msgs if msg["sender"].lower() != "bot"]
         if not non_bot:
             continue
         texts = [remove_emoji(msg["message"]).strip() for msg in non_bot]
         texts = filter_greetings(texts)
-        if len(texts) < 1:  # For testing, require at least 1 non-bot message
+        # For testing, require at least 1 user message
+        if len(texts) < 1:
             continue
+
         main_sel = texts[0]
         intro_sel = texts[1] if len(texts) > 1 else ""
         flow = detect_flow(main_sel, intro_sel) or "Unknown"
@@ -204,8 +207,7 @@ def extract_journeys_from_session(session, file_name):
             "extra_responses": ""
         }
 
-        pointer = 2  # Already used texts[0] and texts[1]
-
+        pointer = 2
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
         elif flow == "RentTenant":
@@ -316,7 +318,6 @@ def extract_journeys_from_session(session, file_name):
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
         journeys.append(journey_record)
-
     return journeys
 
 def process_file(file_path):
@@ -332,7 +333,6 @@ def process_file(file_path):
     return file_records
 
 def process_all_files():
-    """Collects all journeys from every .txt file in CHAT_FOLDER."""
     all_records = []
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
     print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER), flush=True)
@@ -347,10 +347,10 @@ def process_all_files():
 ##########################################################
 def post_journey_to_apps_script(journey):
     """
-    Sends one journey as JSON to the Apps Script Web App endpoint.
-    Converts timestamps to ISO strings to avoid serialization issues.
+    Sends one journey dict as JSON to the Apps Script Web App endpoint.
+    Converts timestamps to ISO strings to avoid JSON serialization errors.
     """
-    # Convert any Timestamp or datetime to ISO format strings.
+    # Convert any Timestamp/datetime objects to ISO format strings
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
