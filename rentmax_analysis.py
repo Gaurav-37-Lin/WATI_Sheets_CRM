@@ -3,14 +3,15 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests  # We'll use requests to POST to the Apps Script endpoint
+import requests  # We'll use this to POST to the Apps Script endpoint
 
 ##########################################################
 # USER CONFIGURATION
 ##########################################################
-CHAT_FOLDER = "logs"  # Where your webhook writes .txt files
+# Folder where your webhook writes .txt files (should match LOG_FOLDER in app.py)
+CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
+# Apps Script URL: set this as an environment variable in Render (APPS_SCRIPT_URL)
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
-# ^ Replace with your actual Apps Script web app URL
 
 ##########################################################
 # FLOW-SPECIFIC COLUMN FILTERING
@@ -26,8 +27,8 @@ FLOW_COLUMNS = {
         "rent_tenant_btn_configuration",
         "rent_tenant_btn_configuration_more",
         "rent_tenant_txt_locality",
-        "rent_tenant_txt_budget_correct",   # Valid budget
-        "rent_tenant_txt_budget_wrong",     # Invalid budget attempts
+        "rent_tenant_txt_budget_correct",
+        "rent_tenant_txt_budget_wrong",
         "rent_tenant_txt_email",
         "rent_tenant_btn_est_move_in"
     ],
@@ -36,23 +37,23 @@ FLOW_COLUMNS = {
         "rent_owner_btn_configuration",
         "rent_owner_btn_configuration_more",
         "rent_owner_txt_locality",
-        "rent_owner_txt_rent_expectation_correct",   # Valid expectation
-        "rent_owner_txt_rent_expectation_wrong"      # Invalid expectation
+        "rent_owner_txt_rent_expectation_correct",
+        "rent_owner_txt_rent_expectation_wrong"
     ],
     "BuyBuyer": COMMON_COLS + [
         "buy_buyer_btn_configuration",
         "buy_buyer_btn_configuration_more",
         "buy_buyer_txt_locality",
-        "buy_buyer_txt_budget_correct",   # Valid budget
-        "buy_buyer_txt_budget_wrong",     # Invalid budget
+        "buy_buyer_txt_budget_correct",
+        "buy_buyer_txt_budget_wrong",
         "buy_buyer_txt_email"
     ],
     "BuySeller": COMMON_COLS + [
         "buy_seller_btn_configuration",
         "buy_seller_btn_configuration_more",
         "buy_seller_txt_locality",
-        "buy_seller_txt_sale_expectation_correct",   # Valid sale expectation
-        "buy_seller_txt_sale_expectation_wrong",     # Invalid sale expectation
+        "buy_seller_txt_sale_expectation_correct",
+        "buy_seller_txt_sale_expectation_wrong",
         "buy_seller_txt_email"
     ],
     "ChannelPartner": COMMON_COLS + [
@@ -83,21 +84,14 @@ def remove_emoji(text):
     return pattern.sub(r'', text)
 
 def is_greeting(text):
-    """Returns True if the text is a generic greeting."""
     greetings = {"hi", "hello", "hey", "greetings"}
     normalized = re.sub(r'[^\w\s]', '', text.lower()).strip()
     return normalized in greetings
 
 def filter_greetings(msgs):
-    """Removes generic greetings from the list."""
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file(file_path):
-    """
-    Parses a chat log file.
-    Expected format for each line:
-      [timestamp] Sender: Message
-    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -120,10 +114,6 @@ def parse_chat_file(file_path):
     return messages
 
 def split_sessions(messages, gap_threshold=600):
-    """
-    Splits messages into sessions if a time gap (in seconds) exceeds gap_threshold.
-    Default gap threshold = 600s (10 minutes).
-    """
     sessions = []
     current = []
     for i, msg in enumerate(messages):
@@ -141,11 +131,6 @@ def split_sessions(messages, gap_threshold=600):
     return sessions
 
 def detect_flow(main_sel, intro_sel):
-    """
-    Determines the flow based on the main menu selection and introduction answer.
-    Returns one of:
-      "RentTenant", "RentOwner", "BuyBuyer", "BuySeller", "ChannelPartner", "TalkToExpert", or None.
-    """
     main_sel = main_sel.lower()
     intro_sel = intro_sel.lower()
     flow = None
@@ -168,14 +153,9 @@ def detect_flow(main_sel, intro_sel):
     return flow
 
 def validate_numeric(value):
-    """Returns True if value contains only digits."""
     return bool(re.fullmatch(r'\d+', value))
 
 def extract_valid_response(texts, start_index, validate_func):
-    """
-    Starting at start_index in texts, iterate until a response passes validate_func.
-    Returns (valid_response, new_index, wrong_responses).
-    """
     wrong = []
     i = start_index
     while i < len(texts):
@@ -191,11 +171,7 @@ def extract_valid_response(texts, start_index, validate_func):
 # JOURNEY EXTRACTION
 ##########################################################
 def extract_journeys_from_session(session, file_name):
-    """
-    Uses the Bot's "How can we assist you today?" message as a delimiter to extract individual journeys.
-    """
     journeys = []
-    # Identify indices where Bot sends the start prompt.
     journey_start_indices = []
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
@@ -206,7 +182,6 @@ def extract_journeys_from_session(session, file_name):
     for k, start_idx in enumerate(journey_start_indices):
         end_idx = journey_start_indices[k+1] if k+1 < len(journey_start_indices) else len(session)
         segment_msgs = session[start_idx:end_idx]
-        # Extract non-bot messages.
         non_bot = [msg for msg in segment_msgs if msg["sender"].lower() != "bot"]
         if not non_bot:
             continue
@@ -231,12 +206,9 @@ def extract_journeys_from_session(session, file_name):
             "intro_selection": intro_sel,
             "extra_responses": ""
         }
-        pointer = 2  # Already used texts[0] and texts[1]
-
-        # The following logic is exactly as in the original RentMAX code
+        pointer = 2
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
-
         elif flow == "RentTenant":
             if pointer < len(texts):
                 journey_record["rent_tenant_btn_city"] = texts[pointer]
@@ -262,7 +234,6 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["rent_tenant_btn_est_move_in"] = texts[pointer]
                 pointer += 1
-
         elif flow == "RentOwner":
             if pointer < len(texts):
                 journey_record["rent_owner_btn_city"] = texts[pointer]
@@ -282,7 +253,6 @@ def extract_journeys_from_session(session, file_name):
                 journey_record["rent_owner_txt_rent_expectation_correct"] = valid_expect
                 journey_record["rent_owner_txt_rent_expectation_wrong"] = "; ".join(wrongs) if wrongs else None
                 pointer = new_ptr
-
         elif flow == "BuyBuyer":
             if pointer < len(texts):
                 apt_size = texts[pointer]
@@ -302,7 +272,6 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["buy_buyer_txt_email"] = texts[pointer]
                 pointer += 1
-
         elif flow == "BuySeller":
             if pointer < len(texts):
                 apt_size = texts[pointer]
@@ -322,7 +291,6 @@ def extract_journeys_from_session(session, file_name):
             if pointer < len(texts):
                 journey_record["buy_seller_txt_email"] = texts[pointer]
                 pointer += 1
-
         elif flow == "ChannelPartner":
             if pointer < len(texts):
                 journey_record["cp_mode_of_operation"] = texts[pointer]
@@ -345,11 +313,8 @@ def extract_journeys_from_session(session, file_name):
                 if pointer < len(texts):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
-
-        # If there are leftover user responses that didn't map, store them
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
-
         journeys.append(journey_record)
     return journeys
 
@@ -367,7 +332,9 @@ def process_file(file_path):
 
 def process_all_files():
     all_records = []
-    for file_path in glob.glob(os.path.join(CHAT_FOLDER, "*.txt")):
+    file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
+    print("DEBUG: Found files:", file_paths)
+    for file_path in file_paths:
         recs = process_file(file_path)
         all_records.extend(recs)
     return all_records
@@ -394,17 +361,10 @@ def post_journey_to_apps_script(journey):
         print(f"Exception posting to Apps Script: {e}")
 
 def main():
-    # 1. Parse all .txt log files in CHAT_FOLDER
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records))
-
-    # 2. Post each journey to your Apps Script endpoint
     for journey in records:
         post_journey_to_apps_script(journey)
-
-    # If you still want to create local Excel for debugging, you can
-    # copy your old 'write_to_excel(records)' code here. 
-    # But this script is now purely for sending data to Apps Script.
 
 if __name__ == "__main__":
     main()

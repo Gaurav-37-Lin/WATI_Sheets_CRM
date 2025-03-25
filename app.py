@@ -4,8 +4,7 @@ from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 import logging
 
-# Import the log processing functions from rentmax_analysis.py
-# (Assuming rentmax_analysis.py is in the same repo)
+# Import log processing functions from rentmax_analysis.py
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
 
 app = Flask(__name__)
@@ -14,9 +13,11 @@ app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
 # Environment variables and defaults
+# LOG_FOLDER: where log files are stored (ephemeral; default "logs")
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
+# Token for webhook validation
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
 @app.route("/")
@@ -26,17 +27,14 @@ def index():
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
-    # Validate the token
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
 
-    # Parse JSON payload
     data = request.get_json(force=True)
     if not data:
         return jsonify({"status": "no data"}), 400
 
-    # Extract WhatsApp ID and timestamp
     wa_id = data.get("waId", "unknown")
     raw_ts = data.get("timestamp", "")
     try:
@@ -45,7 +43,6 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
-    # Determine sender label based on the 'owner' flag
     if data.get("owner"):
         sender_name = data.get("operatorName", "Bot")
     else:
@@ -54,7 +51,7 @@ def wati_webhook():
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # Append the log line to a file named after the user's WhatsApp number
+    # Write the log line to a file named after the WhatsApp ID
     log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
