@@ -3,14 +3,10 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests  # We'll use this to POST to the Apps Script endpoint
+import requests
 
-##########################################################
-# USER CONFIGURATION
-##########################################################
-# Folder where your webhook writes .txt files (should match LOG_FOLDER in app.py)
+# Environment variables for folder and Apps Script URL
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
-# Apps Script URL: set this as an environment variable in Render (APPS_SCRIPT_URL)
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
 ##########################################################
@@ -92,6 +88,10 @@ def filter_greetings(msgs):
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file(file_path):
+    """
+    Parses a chat log file in the format:
+      [timestamp] Sender: Message
+    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -172,6 +172,7 @@ def extract_valid_response(texts, start_index, validate_func):
 ##########################################################
 def extract_journeys_from_session(session, file_name):
     journeys = []
+    # Identify indices where the Bot sends "How can we assist you today?"
     journey_start_indices = []
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
@@ -206,7 +207,9 @@ def extract_journeys_from_session(session, file_name):
             "intro_selection": intro_sel,
             "extra_responses": ""
         }
-        pointer = 2
+        pointer = 2  # We've used texts[0] and texts[1]
+
+        # Flow-specific logic
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
         elif flow == "RentTenant":
@@ -313,6 +316,7 @@ def extract_journeys_from_session(session, file_name):
                 if pointer < len(texts):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
+
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
         journeys.append(journey_record)
@@ -331,6 +335,7 @@ def process_file(file_path):
     return file_records
 
 def process_all_files():
+    """Collects all journeys from every .txt file in CHAT_FOLDER."""
     all_records = []
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
     print("DEBUG: Found files:", file_paths)
@@ -344,13 +349,19 @@ def process_all_files():
 ##########################################################
 def post_journey_to_apps_script(journey):
     """
-    Sends a single journey dict as JSON to the Apps Script Web App endpoint.
-    The Apps Script doPost function will parse this and append a row.
+    Sends one journey as JSON to the Apps Script Web App endpoint.
+    The doPost(e) in Apps Script should parse this and append a row.
     """
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
+        print("Response status code:", response.status_code)
+        print("Response text:", response.text)
         if response.status_code == 200:
-            resp_data = response.json()
+            try:
+                resp_data = response.json()
+            except Exception as json_err:
+                print("Error decoding JSON:", json_err)
+                resp_data = {}
             if resp_data.get("result") == "success":
                 print(f"Successfully posted journey for {journey.get('username')} to Apps Script.")
             else:
@@ -361,6 +372,7 @@ def post_journey_to_apps_script(journey):
         print(f"Exception posting to Apps Script: {e}")
 
 def main():
+    # For local testing or manual invocation
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records))
     for journey in records:

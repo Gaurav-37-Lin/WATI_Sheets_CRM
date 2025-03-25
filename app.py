@@ -8,16 +8,12 @@ import logging
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
 
 app = Flask(__name__)
-
-# Set up logging to console
 logging.basicConfig(level=logging.INFO)
 
 # Environment variables and defaults
-# LOG_FOLDER: where log files are stored (ephemeral; default "logs")
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
-# Token for webhook validation
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
 @app.route("/")
@@ -27,6 +23,7 @@ def index():
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
+    """Endpoint to receive incoming WATI messages and log them to a file."""
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
@@ -35,6 +32,7 @@ def wati_webhook():
     if not data:
         return jsonify({"status": "no data"}), 400
 
+    # Extract phone ID (waId) and timestamp
     wa_id = data.get("waId", "unknown")
     raw_ts = data.get("timestamp", "")
     try:
@@ -43,6 +41,7 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
+    # Determine if message is from user or bot
     if data.get("owner"):
         sender_name = data.get("operatorName", "Bot")
     else:
@@ -51,7 +50,7 @@ def wati_webhook():
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # Write the log line to a file named after the WhatsApp ID
+    # Append the log line to a file named after the user's WhatsApp number
     log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
@@ -64,19 +63,26 @@ def wati_webhook():
     return jsonify({"status": "received"}), 200
 
 def process_logs():
+    """
+    Background job function that:
+    1. Reads all .txt log files in LOG_FOLDER
+    2. Extracts journeys via RentMAX logic
+    3. Posts each journey to the Apps Script endpoint
+    """
     app.logger.info("Starting scheduled log processing...")
-    records = process_all_files()
+    records = process_all_files()  # from rentmax_analysis.py
     app.logger.info("DEBUG: Total records extracted: %s", len(records))
     for journey in records:
         post_journey_to_apps_script(journey)
     app.logger.info("Finished processing logs.")
 
 if __name__ == "__main__":
-    # Start background scheduler to process logs every 30 minutes
+    # Start APScheduler background job: runs every 30 minutes
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=process_logs, trigger="interval", minutes=30)
     scheduler.start()
     try:
+        # Run the Flask app
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
