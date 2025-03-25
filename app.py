@@ -1,8 +1,9 @@
 import os
 import time
+import sys
+import logging
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
-import logging
 
 # Import log processing functions from rentmax_analysis.py
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
@@ -10,7 +11,8 @@ from rentmax_analysis import process_all_files, post_journey_to_apps_script
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables and defaults
+# Environment variables and defaults:
+# LOG_FOLDER should be set to your persistent disk path (e.g., "/data/logs")
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
@@ -39,7 +41,6 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
-    # Use operatorName if owner is True, else senderName
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
@@ -57,22 +58,37 @@ def wati_webhook():
 
 def process_logs():
     app.logger.info("Starting scheduled log processing...")
-    # Debug print: show the folder being searched
     app.logger.info("DEBUG: Searching for .txt files in: %s", os.path.abspath(LOG_FOLDER))
     records = process_all_files()
     app.logger.info("DEBUG: Total records extracted: %s", len(records))
     if not records:
-        app.logger.warning("No journeys extracted. Check if the expected Bot prompt is present in the logs.")
+        app.logger.warning("No journeys extracted. Check if the expected bot prompt is present in the logs.")
     for journey in records:
         post_journey_to_apps_script(journey)
     app.logger.info("Finished processing logs.")
 
-if __name__ == "__main__":
+def start_scheduler():
     scheduler = BackgroundScheduler()
-    # For testing, set to run every minute. Change to minutes=30 for production.
+    # For testing, run every 1 minute; adjust to 30 minutes for production.
     scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
     scheduler.start()
     try:
-        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+        while True:
+            time.sleep(60)
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
+
+if __name__ == "__main__":
+    # For a combined single-process approach, run both Flask and the scheduler.
+    # If you want to run just the scheduler, you can pass "--scheduler-only" as a command-line argument.
+    if "--scheduler-only" in sys.argv:
+        start_scheduler()
+    else:
+        # Running in combined mode: start scheduler in a separate thread and run Flask.
+        scheduler = BackgroundScheduler()
+        scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
+        scheduler.start()
+        try:
+            app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+        except (KeyboardInterrupt, SystemExit):
+            scheduler.shutdown()

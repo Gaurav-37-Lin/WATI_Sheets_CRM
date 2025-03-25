@@ -3,9 +3,9 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests  # For posting to the Apps Script endpoint
+import requests  # For posting data to the Apps Script endpoint
 
-# Use the same folder for logs as in app.py
+# Use the same LOG_FOLDER as in app.py
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
@@ -168,8 +168,8 @@ def extract_valid_response(texts, start_index, validate_func):
 ##########################################################
 def extract_journeys_from_session(session, file_name):
     journeys = []
-    # Check for the bot prompt. Update this string if your bot uses a different message.
     journey_start_indices = []
+    # Look for the bot prompt "how can we assist you today"
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
