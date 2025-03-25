@@ -4,79 +4,60 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Get your secret token from Render environment variables
-# (Set "WATI_WEBHOOK_TOKEN" in Render's Environment tab)
+# Read the secret token from an environment variable for security
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
-# Ensure there's a logs directory (Render’s free tier is ephemeral, so this may reset on redeploy)
+# Ensure a directory for log files exists (Render's filesystem is ephemeral)
 os.makedirs("logs", exist_ok=True)
 
 @app.route("/")
 def index():
-    return "Hello from Flask! Your app is running."
+    return "Webhook is running."
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
-    """
-    Receives JSON data from WATI.
-    Expects a query parameter like ?token=YOUR_TOKEN matching WEBHOOK_TOKEN.
-    """
-    # Check the token
+    """Endpoint to receive WhatsApp webhook data from WATI."""
+    # 1. Validate the request using a token (security check)
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
 
-    # Parse JSON payload
+    # 2. Parse JSON payload
     data = request.get_json(force=True)
     if not data:
         return jsonify({"status": "no data"}), 400
 
-    # Extract details for logging
-    # 'waId' is the user's WhatsApp number (e.g., '918779501765')
-    wa_id = data.get("waId", "unknown")
-
-    # For a readable timestamp, convert WATI's 'timestamp' if it exists
-    # WATI often gives epoch as string in 'timestamp', but let's just store raw if conversion fails
-    raw_ts = data.get("timestamp", "")
+    # 3. Extract relevant fields from WATI data
+    wa_id = data.get("waId", "unknown")  # WhatsApp phone ID of sender
+    raw_ts = data.get("timestamp", "")   # Unix epoch timestamp (in seconds)
     try:
-        # Convert to integer and then to localtime
-        epoch_ts = int(raw_ts)
-        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch_ts))
+        # Convert epoch timestamp to human-readable format (local time)
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(raw_ts)))
     except:
-        # Fallback to the raw value if parsing fails
-        time_str = str(raw_ts)
+        ts = str(raw_ts)  # Fallback to raw timestamp if conversion fails
 
-    # Determine the sender label
-    # If 'owner' == False, it's an inbound user message. If True, it's from your side (bot/template).
-    # We can also use 'senderName' for user or 'operatorName' for bot messages.
-    owner = data.get("owner")
+    # Determine who the sender is (user or our bot/operator)
+    owner = data.get("owner")  # WATI 'owner': True if message is from the business (our side)
     if owner is True:
-        sender_name = data.get("operatorName", "Bot")
+        sender_name = data.get("operatorName", "Bot")   # Bot/operator message
     else:
-        sender_name = data.get("senderName", "User")
+        sender_name = data.get("senderName", "User")    # Inbound user message
 
-    # The actual text
-    text = data.get("text", "")
+    text = data.get("text", "")  # The message text content
 
-    # Format a chat-style log line
-    # Example: [2025-03-25 06:00:10] g: Hi
-    log_line = f"[{time_str}] {sender_name}: {text}"
+    # 4. Format the log line in "[timestamp] sender: message" format
+    log_line = f"[{ts}] {sender_name}: {text}"
 
-    # Write to a file named after the user's waId
-    # This is how RentMAX typically expects chat logs
-    log_path = f"logs/{wa_id}.txt"
+    # 5. Append the log line to a file named after the user’s WhatsApp ID (waId)
+    log_file = f"logs/{wa_id}.txt"
     try:
-        with open(log_path, "a", encoding="utf-8") as f:
+        with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
     except Exception as e:
-        print(f"Error writing log to {log_path}: {e}")
+        print(f"Error writing to {log_file}: {e}")
 
-    # Print to console for debugging (optional)
-    print("WATI Webhook data received:", data)
+    # 6. (Optional) print to console for debugging
+    print("Received webhook message:", log_line)
 
-    # Acknowledge success so WATI doesn't retry
+    # 7. Respond to WATI to acknowledge receipt (HTTP 200 OK)
     return jsonify({"status": "received"}), 200
-
-if __name__ == "__main__":
-    # Local test run (not used in production on Render)
-    app.run(debug=True, port=5000)
