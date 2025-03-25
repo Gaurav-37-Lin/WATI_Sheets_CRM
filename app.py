@@ -4,60 +4,67 @@ from flask import Flask, request, jsonify
 
 app = Flask(__name__)
 
-# Read the secret token from an environment variable for security
-WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
+# Use environment variable for the logs folder, defaulting to "logs"
+LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 
-# Ensure a directory for log files exists (Render's filesystem is ephemeral)
-os.makedirs("logs", exist_ok=True)
+# Ensure the log folder exists
+os.makedirs(LOG_FOLDER, exist_ok=True)
+
+# Get the webhook token from an environment variable
+WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
 @app.route("/")
 def index():
-    return "Webhook is running."
+    # Return a message with the absolute path of the log directory
+    abs_log_path = os.path.abspath(LOG_FOLDER)
+    return f"Webhook is running. Log files are stored in: {abs_log_path}"
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
-    """Endpoint to receive WhatsApp webhook data from WATI."""
-    # 1. Validate the request using a token (security check)
+    # Validate the token from the query parameter
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
 
-    # 2. Parse JSON payload
+    # Parse the JSON payload
     data = request.get_json(force=True)
     if not data:
         return jsonify({"status": "no data"}), 400
 
-    # 3. Extract relevant fields from WATI data
-    wa_id = data.get("waId", "unknown")  # WhatsApp phone ID of sender
-    raw_ts = data.get("timestamp", "")   # Unix epoch timestamp (in seconds)
+    # Get the WhatsApp ID and set a default if not provided
+    wa_id = data.get("waId", "unknown")
+
+    # Parse timestamp to a readable format
+    raw_ts = data.get("timestamp", "")
     try:
-        # Convert epoch timestamp to human-readable format (local time)
-        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(int(raw_ts)))
-    except:
-        ts = str(raw_ts)  # Fallback to raw timestamp if conversion fails
+        epoch_ts = int(raw_ts)
+        time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch_ts))
+    except Exception:
+        time_str = str(raw_ts)
 
-    # Determine who the sender is (user or our bot/operator)
-    owner = data.get("owner")  # WATI 'owner': True if message is from the business (our side)
+    # Determine the sender's label based on "owner" field
+    owner = data.get("owner")
     if owner is True:
-        sender_name = data.get("operatorName", "Bot")   # Bot/operator message
+        sender_name = data.get("operatorName", "Bot")
     else:
-        sender_name = data.get("senderName", "User")    # Inbound user message
+        sender_name = data.get("senderName", "User")
 
-    text = data.get("text", "")  # The message text content
+    text = data.get("text", "")
+    log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # 4. Format the log line in "[timestamp] sender: message" format
-    log_line = f"[{ts}] {sender_name}: {text}"
-
-    # 5. Append the log line to a file named after the user’s WhatsApp ID (waId)
-    log_file = f"logs/{wa_id}.txt"
+    # Build the log file path (e.g., logs/918779501765.txt)
+    log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
+    
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
+        # Print the full path for debugging
+        print(f"Appended log line to: {os.path.abspath(log_file)}")
     except Exception as e:
         print(f"Error writing to {log_file}: {e}")
 
-    # 6. (Optional) print to console for debugging
-    print("Received webhook message:", log_line)
-
-    # 7. Respond to WATI to acknowledge receipt (HTTP 200 OK)
+    print("WATI Webhook data received:", data)
     return jsonify({"status": "received"}), 200
+
+if __name__ == "__main__":
+    app.run(debug=True, port=5000)
