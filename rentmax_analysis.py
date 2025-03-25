@@ -5,7 +5,7 @@ import pandas as pd
 import numpy as np
 import requests  # For posting data to the Apps Script endpoint
 
-# Use the same LOG_FOLDER as in app.py
+# Use the same folder for logs as in app.py
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
@@ -169,7 +169,6 @@ def extract_valid_response(texts, start_index, validate_func):
 def extract_journeys_from_session(session, file_name):
     journeys = []
     journey_start_indices = []
-    # Look for the bot prompt "how can we assist you today"
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
@@ -185,10 +184,11 @@ def extract_journeys_from_session(session, file_name):
             continue
         texts = [remove_emoji(msg["message"]).strip() for msg in non_bot]
         texts = filter_greetings(texts)
-        if len(texts) < 2:
+        # For testing, require at least 1 non-bot message (adjust as needed)
+        if len(texts) < 1:
             continue
         main_sel = texts[0]
-        intro_sel = texts[1]
+        intro_sel = texts[1] if len(texts) > 1 else ""
         flow = detect_flow(main_sel, intro_sel)
         if not flow:
             flow = "Unknown"
@@ -347,6 +347,10 @@ def post_journey_to_apps_script(journey):
     Sends one journey as JSON to the Apps Script Web App endpoint.
     The doPost(e) function in Apps Script should parse this and append a row.
     """
+    # Convert Timestamp objects to ISO format strings, if needed.
+    for key, value in journey.items():
+        if hasattr(value, "isoformat"):
+            journey[key] = value.isoformat()
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
         print("Response status code:", response.status_code, flush=True)
