@@ -3,9 +3,9 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests
+import requests  # Used to post to the Apps Script endpoint
 
-# Environment variables for folder and Apps Script URL
+# Use the same folder for logs as in app.py
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
@@ -88,10 +88,6 @@ def filter_greetings(msgs):
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file(file_path):
-    """
-    Parses a chat log file in the format:
-      [timestamp] Sender: Message
-    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -172,7 +168,6 @@ def extract_valid_response(texts, start_index, validate_func):
 ##########################################################
 def extract_journeys_from_session(session, file_name):
     journeys = []
-    # Identify indices where the Bot sends "How can we assist you today?"
     journey_start_indices = []
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
@@ -207,9 +202,7 @@ def extract_journeys_from_session(session, file_name):
             "intro_selection": intro_sel,
             "extra_responses": ""
         }
-        pointer = 2  # We've used texts[0] and texts[1]
-
-        # Flow-specific logic
+        pointer = 2
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
         elif flow == "RentTenant":
@@ -316,7 +309,6 @@ def extract_journeys_from_session(session, file_name):
                 if pointer < len(texts):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
-
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
         journeys.append(journey_record)
@@ -338,6 +330,7 @@ def process_all_files():
     """Collects all journeys from every .txt file in CHAT_FOLDER."""
     all_records = []
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
+    print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER))
     print("DEBUG: Found files:", file_paths)
     for file_path in file_paths:
         recs = process_file(file_path)
@@ -350,7 +343,7 @@ def process_all_files():
 def post_journey_to_apps_script(journey):
     """
     Sends one journey as JSON to the Apps Script Web App endpoint.
-    The doPost(e) in Apps Script should parse this and append a row.
+    The doPost(e) function in Apps Script should parse this and append a row.
     """
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
@@ -372,7 +365,6 @@ def post_journey_to_apps_script(journey):
         print(f"Exception posting to Apps Script: {e}")
 
 def main():
-    # For local testing or manual invocation
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records))
     for journey in records:
