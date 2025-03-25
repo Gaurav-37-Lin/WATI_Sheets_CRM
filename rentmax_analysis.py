@@ -3,7 +3,7 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-import requests  # Used to post to the Apps Script endpoint
+import requests  # For posting to the Apps Script endpoint
 
 # Use the same folder for logs as in app.py
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
@@ -168,11 +168,13 @@ def extract_valid_response(texts, start_index, validate_func):
 ##########################################################
 def extract_journeys_from_session(session, file_name):
     journeys = []
+    # Check for the bot prompt. Update this string if your bot uses a different message.
     journey_start_indices = []
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
     if not journey_start_indices:
+        print(f"DEBUG: No journey start prompt found in file: {file_name}", flush=True)
         return journeys
 
     for k, start_idx in enumerate(journey_start_indices):
@@ -330,8 +332,8 @@ def process_all_files():
     """Collects all journeys from every .txt file in CHAT_FOLDER."""
     all_records = []
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
-    print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER))
-    print("DEBUG: Found files:", file_paths)
+    print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER), flush=True)
+    print("DEBUG: Found files:", file_paths, flush=True)
     for file_path in file_paths:
         recs = process_file(file_path)
         all_records.extend(recs)
@@ -347,26 +349,26 @@ def post_journey_to_apps_script(journey):
     """
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
-        print("Response status code:", response.status_code)
-        print("Response text:", response.text)
+        print("Response status code:", response.status_code, flush=True)
+        print("Response text:", response.text, flush=True)
         if response.status_code == 200:
             try:
                 resp_data = response.json()
             except Exception as json_err:
-                print("Error decoding JSON:", json_err)
+                print("Error decoding JSON:", json_err, flush=True)
                 resp_data = {}
             if resp_data.get("result") == "success":
-                print(f"Successfully posted journey for {journey.get('username')} to Apps Script.")
+                print(f"Successfully posted journey for {journey.get('username')} to Apps Script.", flush=True)
             else:
-                print(f"Apps Script returned an error: {resp_data}")
+                print(f"Apps Script returned an error: {resp_data}", flush=True)
         else:
-            print(f"HTTP {response.status_code} error when posting to Apps Script: {response.text}")
+            print(f"HTTP {response.status_code} error when posting to Apps Script: {response.text}", flush=True)
     except Exception as e:
-        print(f"Exception posting to Apps Script: {e}")
+        print(f"Exception posting to Apps Script: {e}", flush=True)
 
 def main():
     records = process_all_files()
-    print("DEBUG: Total records extracted:", len(records))
+    print("DEBUG: Total records extracted:", len(records), flush=True)
     for journey in records:
         post_journey_to_apps_script(journey)
 

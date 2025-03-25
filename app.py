@@ -39,6 +39,7 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
+    # Use operatorName if owner is True, else senderName
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
@@ -55,23 +56,21 @@ def wati_webhook():
     return jsonify({"status": "received"}), 200
 
 def process_logs():
-    """
-    Background job: process all .txt files in LOG_FOLDER, extract journeys,
-    and post each journey to the Apps Script endpoint.
-    """
     app.logger.info("Starting scheduled log processing...")
-    # Debug: show which folder is searched
+    # Debug print: show the folder being searched
     app.logger.info("DEBUG: Searching for .txt files in: %s", os.path.abspath(LOG_FOLDER))
     records = process_all_files()
     app.logger.info("DEBUG: Total records extracted: %s", len(records))
+    if not records:
+        app.logger.warning("No journeys extracted. Check if the expected Bot prompt is present in the logs.")
     for journey in records:
         post_journey_to_apps_script(journey)
     app.logger.info("Finished processing logs.")
 
 if __name__ == "__main__":
     scheduler = BackgroundScheduler()
-    # For testing, you might reduce the interval (e.g., minutes=1)
-    scheduler.add_job(func=process_logs, trigger="interval", minutes=30)
+    # For testing, set to run every minute. Change to minutes=30 for production.
+    scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
     scheduler.start()
     try:
         app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
