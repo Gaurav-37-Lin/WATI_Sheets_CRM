@@ -3,26 +3,14 @@ import glob
 import re
 import pandas as pd
 import numpy as np
-
-# Google Sheets imports (for appending data)
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
+import requests  # We'll use requests to POST to the Apps Script endpoint
 
 ##########################################################
 # USER CONFIGURATION
 ##########################################################
-# 1. The folder where your WATI webhook writes .txt log files
-#    On Render or any cloud, "logs" is typically the ephemeral directory you used in app.py
-CHAT_FOLDER = "logs"
-
-# 2. Google Sheet configuration
-#    Change this to the exact title of your Google Sheet
-GOOGLE_SHEET_NAME = "WATI chatbot Master data"
-
-# 3. Path or environment variable for your service account JSON
-#    Example: If you have a file named 'service_account.json' in your repo, set SERVICE_ACCOUNT_FILE to that path.
-#    Or you can write the JSON to a file from an environment variable on Render.
-SERVICE_ACCOUNT_FILE = "service_account.json"  # or os.environ.get("SERVICE_ACCOUNT_FILE_PATH")
+CHAT_FOLDER = "logs"  # Where your webhook writes .txt files
+APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
+# ^ Replace with your actual Apps Script web app URL
 
 ##########################################################
 # FLOW-SPECIFIC COLUMN FILTERING
@@ -245,6 +233,7 @@ def extract_journeys_from_session(session, file_name):
         }
         pointer = 2  # Already used texts[0] and texts[1]
 
+        # The following logic is exactly as in the original RentMAX code
         if flow == "TalkToExpert":
             journey_record["message"] = "Talk to Expert selected"
 
@@ -357,8 +346,8 @@ def extract_journeys_from_session(session, file_name):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
 
+        # If there are leftover user responses that didn't map, store them
         if pointer < len(texts):
-            # Any leftover user responses that didn't map to a field
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
 
         journeys.append(journey_record)
@@ -378,92 +367,44 @@ def process_file(file_path):
 
 def process_all_files():
     all_records = []
-    # Gather all .txt files in CHAT_FOLDER
     for file_path in glob.glob(os.path.join(CHAT_FOLDER, "*.txt")):
         recs = process_file(file_path)
         all_records.extend(recs)
     return all_records
 
 ##########################################################
-# GOOGLE SHEETS APPEND
+# APPS SCRIPT WEB APP INTEGRATION
 ##########################################################
-def append_to_google_sheets(records):
+def post_journey_to_apps_script(journey):
     """
-    Appends the processed journey records to a Google Sheet (GOOGLE_SHEET_NAME).
-    Assumes you have a service account JSON and have shared the sheet with that account.
+    Sends a single journey dict as JSON to the Apps Script Web App endpoint.
+    The Apps Script doPost function will parse this and append a row.
     """
-    if not records:
-        print("No records to append to Google Sheets.")
-        return
-
-    # 1. Authorize with Google using service account
-    scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/spreadsheets"]
-    creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
-    client = gspread.authorize(creds)
-
-    # 2. Open the Google Sheet
     try:
-        spreadsheet = client.open(GOOGLE_SHEET_NAME)
-        worksheet = spreadsheet.sheet1  # or specify .worksheet("YourSheetTabName") if multiple tabs
+        response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
+        if response.status_code == 200:
+            resp_data = response.json()
+            if resp_data.get("result") == "success":
+                print(f"Successfully posted journey for {journey.get('username')} to Apps Script.")
+            else:
+                print(f"Apps Script returned an error: {resp_data}")
+        else:
+            print(f"HTTP {response.status_code} error when posting to Apps Script: {response.text}")
     except Exception as e:
-        print(f"Error opening Google Sheet '{GOOGLE_SHEET_NAME}': {e}")
-        return
-
-    # 3. Convert each record (dictionary) into a list of values
-    #    For demonstration, we'll pick a standard set of columns to append
-    #    You can map them to match your actual sheet columns or adapt dynamically
-    rows_to_append = []
-    for journey in records:
-        # You could pick the flow-specific columns from FLOW_COLUMNS if you want.
-        # For simplicity, let's gather a subset of fields:
-        row = [
-            journey.get("file", ""),
-            journey.get("username", ""),
-            journey.get("flow", ""),
-            str(journey.get("journey_start", "")),
-            str(journey.get("journey_end", "")),
-            str(journey.get("total_messages", "")),
-            journey.get("main_selection", ""),
-            journey.get("intro_selection", ""),
-            journey.get("extra_responses", "")
-        ]
-        # Add more fields if needed (rent_tenant_txt_locality, etc.)
-        rows_to_append.append(row)
-
-    # 4. Append all new rows in one batch
-    try:
-        worksheet.append_rows(rows_to_append, value_input_option="RAW")
-        print(f"Appended {len(rows_to_append)} rows to '{GOOGLE_SHEET_NAME}'.")
-    except Exception as e:
-        print(f"Error appending rows to Google Sheet: {e}")
-
-##########################################################
-# OPTIONAL: EXCEL WRITING (commented out)
-##########################################################
-# def write_to_excel(records):
-#     df = pd.DataFrame(records)
-#     flows = df["flow"].unique() if "flow" in df.columns else ["All"]
-#     sheets = {}
-#     for f in flows:
-#         cols = FLOW_COLUMNS.get(f, df.columns.tolist())
-#         sheet_df = df[df["flow"] == f].copy()
-#         sheet_df = sheet_df[[c for c in cols if c in sheet_df.columns]]
-#         sheets[f] = sheet_df
-#     with pd.ExcelWriter("RentMAX_FinalMultiSheet.xlsx", engine='openpyxl') as writer:
-#         for sheet_name, data in sheets.items():
-#             data.to_excel(writer, sheet_name=sheet_name, index=False)
-#     print("Done! Output written to RentMAX_FinalMultiSheet.xlsx")
+        print(f"Exception posting to Apps Script: {e}")
 
 def main():
     # 1. Parse all .txt log files in CHAT_FOLDER
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records))
 
-    # 2. Append them to Google Sheets
-    append_to_google_sheets(records)
+    # 2. Post each journey to your Apps Script endpoint
+    for journey in records:
+        post_journey_to_apps_script(journey)
 
-    # 3. (Optional) If you still want to generate Excel locally, uncomment:
-    # write_to_excel(records)
+    # If you still want to create local Excel for debugging, you can
+    # copy your old 'write_to_excel(records)' code here. 
+    # But this script is now purely for sending data to Apps Script.
 
 if __name__ == "__main__":
     main()
