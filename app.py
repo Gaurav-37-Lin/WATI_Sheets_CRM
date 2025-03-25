@@ -1,40 +1,43 @@
 import os
 import time
 from flask import Flask, request, jsonify
+from apscheduler.schedulers.background import BackgroundScheduler
+import logging
+
+# Import the log processing functions from rentmax_analysis.py
+# (Assuming rentmax_analysis.py is in the same repo)
+from rentmax_analysis import process_all_files, post_journey_to_apps_script
 
 app = Flask(__name__)
 
-# Use environment variable for the logs folder, defaulting to "logs"
-LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
+# Set up logging to console
+logging.basicConfig(level=logging.INFO)
 
-# Ensure the log folder exists
+# Environment variables and defaults
+LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
-# Get the webhook token from an environment variable
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
 @app.route("/")
 def index():
-    # Return a message with the absolute path of the log directory
     abs_log_path = os.path.abspath(LOG_FOLDER)
     return f"Webhook is running. Log files are stored in: {abs_log_path}"
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
-    # Validate the token from the query parameter
+    # Validate the token
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
 
-    # Parse the JSON payload
+    # Parse JSON payload
     data = request.get_json(force=True)
     if not data:
         return jsonify({"status": "no data"}), 400
 
-    # Get the WhatsApp ID and set a default if not provided
+    # Extract WhatsApp ID and timestamp
     wa_id = data.get("waId", "unknown")
-
-    # Parse timestamp to a readable format
     raw_ts = data.get("timestamp", "")
     try:
         epoch_ts = int(raw_ts)
@@ -42,9 +45,8 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
-    # Determine the sender's label based on "owner" field
-    owner = data.get("owner")
-    if owner is True:
+    # Determine sender label based on the 'owner' flag
+    if data.get("owner"):
         sender_name = data.get("operatorName", "Bot")
     else:
         sender_name = data.get("senderName", "User")
@@ -52,19 +54,32 @@ def wati_webhook():
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # Build the log file path (e.g., logs/918779501765.txt)
+    # Append the log line to a file named after the user's WhatsApp number
     log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
-    
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
-        # Print the full path for debugging
-        print(f"Appended log line to: {os.path.abspath(log_file)}")
+        app.logger.info(f"Appended log line to: {os.path.abspath(log_file)}")
     except Exception as e:
-        print(f"Error writing to {log_file}: {e}")
+        app.logger.error(f"Error writing to {log_file}: {e}")
 
-    print("WATI Webhook data received:", data)
+    app.logger.info("WATI Webhook data received: %s", data)
     return jsonify({"status": "received"}), 200
 
+def process_logs():
+    app.logger.info("Starting scheduled log processing...")
+    records = process_all_files()
+    app.logger.info("DEBUG: Total records extracted: %s", len(records))
+    for journey in records:
+        post_journey_to_apps_script(journey)
+    app.logger.info("Finished processing logs.")
+
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    # Start background scheduler to process logs every 30 minutes
+    scheduler = BackgroundScheduler()
+    scheduler.add_job(func=process_logs, trigger="interval", minutes=30)
+    scheduler.start()
+    try:
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    except (KeyboardInterrupt, SystemExit):
+        scheduler.shutdown()
