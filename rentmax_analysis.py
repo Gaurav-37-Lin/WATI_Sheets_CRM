@@ -5,6 +5,7 @@ import json
 import pandas as pd
 import numpy as np
 import requests
+import pytz
 
 # Directory where the log files are stored (should be the same as in app.py)
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
@@ -92,6 +93,9 @@ def parse_chat_file_from_offset(file_path, offset):
     """
     Reads the log file starting from the given offset (line number)
     and returns a list of messages plus the new offset (total lines read).
+    
+    UPDATED: Converts the raw timestamp (assumed epoch seconds in UTC)
+    into the desired timezone (here: Asia/Kolkata).
     """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
@@ -109,7 +113,8 @@ def parse_chat_file_from_offset(file_path, offset):
             if m:
                 raw_ts, sender, text = m.groups()
                 try:
-                    ts = pd.to_datetime(raw_ts, errors='coerce')
+                    # Convert raw_ts (epoch seconds) to a timezone-aware timestamp in Asia/Kolkata
+                    ts = pd.to_datetime(raw_ts, unit='s', utc=True).tz_convert('Asia/Kolkata')
                 except Exception:
                     ts = None
                 messages.append({
@@ -121,10 +126,6 @@ def parse_chat_file_from_offset(file_path, offset):
     return messages, current_line
 
 def split_sessions(messages, gap_threshold=600):
-    """
-    Splits a list of messages into sessions.
-    A session is broken when the gap between messages exceeds gap_threshold seconds.
-    """
     sessions = []
     current = []
     for i, msg in enumerate(messages):
@@ -179,10 +180,6 @@ def extract_valid_response(texts, start_index, validate_func):
     return None, i, wrong
 
 def extract_journeys_from_session(session, file_name):
-    """
-    Scans a session for the bot prompt ("how can we assist you today") 
-    and extracts journey data from subsequent messages.
-    """
     journeys = []
     journey_start_indices = []
     for idx, msg in enumerate(session):
@@ -356,7 +353,6 @@ def process_file(file_path):
     complete_sessions = []
     for i, session in enumerate(sessions):
         if i == len(sessions) - 1:
-            # If the last message in the last session is older than threshold, consider it complete
             if session[-1]["timestamp"] <= threshold:
                 complete_sessions.append(session)
             else:
@@ -365,7 +361,6 @@ def process_file(file_path):
         else:
             complete_sessions.append(session)
     
-    # Count lines processed from complete sessions
     lines_processed = sum(len(s) for s in complete_sessions)
     file_records = []
     new_journeys = 0
@@ -375,7 +370,6 @@ def process_file(file_path):
             new_journeys += len(recs)
             file_records.extend(recs)
     
-    # Update offset only up to the end of the last complete session
     final_offset = start_line + lines_processed
     journey_count += new_journeys
     offset_info = {"line_offset": final_offset, "journey_count": journey_count}
@@ -385,7 +379,7 @@ def process_file(file_path):
     except Exception as e:
         print(f"Error writing offset file {offset_file}: {e}", flush=True)
     
-    # Extract mobile number from file name (remove any .done suffix)
+    # Extract mobile number from the file name (remove any .done suffix)
     base_name = os.path.basename(file_path).replace(".done", "")
     mobile = base_name.replace(".txt", "")
     for rec in file_records:
@@ -404,7 +398,6 @@ def process_all_files():
     return all_records
 
 def post_journey_to_apps_script(journey):
-    # Convert any Timestamp/datetime objects to ISO strings
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
