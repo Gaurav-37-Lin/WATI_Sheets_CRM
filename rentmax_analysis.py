@@ -94,8 +94,9 @@ def parse_chat_file_from_offset(file_path, offset):
     Reads the log file starting from the given offset (line number)
     and returns a list of messages plus the new offset (total lines read).
     
-    UPDATED: Converts the raw timestamp (assumed epoch seconds in UTC)
-    into the desired timezone (here: Asia/Kolkata).
+    This function attempts to convert the raw timestamp (assumed to be epoch seconds in UTC)
+    into a timezone-aware timestamp in Asia/Kolkata. If conversion fails, it falls back
+    to a general conversion and logs the raw value and error.
     """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
@@ -112,11 +113,19 @@ def parse_chat_file_from_offset(file_path, offset):
             m = re.match(pattern, line)
             if m:
                 raw_ts, sender, text = m.groups()
+                ts = None
                 try:
-                    # Convert raw_ts (epoch seconds) to a timezone-aware timestamp in Asia/Kolkata
+                    # Try converting assuming raw_ts is in epoch seconds (UTC)
                     ts = pd.to_datetime(raw_ts, unit='s', utc=True).tz_convert('Asia/Kolkata')
-                except Exception:
-                    ts = None
+                except Exception as e:
+                    print(f"Timestamp conversion failed for value '{raw_ts}': {e}", flush=True)
+                    try:
+                        # Fallback: try a general conversion without unit
+                        ts = pd.to_datetime(raw_ts)
+                        print(f"Fallback conversion succeeded for value '{raw_ts}': {ts}", flush=True)
+                    except Exception as e2:
+                        print(f"Fallback conversion also failed for value '{raw_ts}': {e2}", flush=True)
+                        ts = None
                 messages.append({
                     "timestamp": ts,
                     "sender": sender.strip(),
@@ -126,18 +135,24 @@ def parse_chat_file_from_offset(file_path, offset):
     return messages, current_line
 
 def split_sessions(messages, gap_threshold=600):
+    """
+    Splits messages into sessions. Filters out messages with None timestamps.
+    """
+    valid_messages = [msg for msg in messages if msg["timestamp"] is not None]
+    if not valid_messages:
+        return []
+    
     sessions = []
-    current = []
-    for i, msg in enumerate(messages):
-        if i == 0:
-            current.append(msg)
+    current = [valid_messages[0]]
+    for i in range(1, len(valid_messages)):
+        prev_ts = valid_messages[i-1]["timestamp"]
+        curr_ts = valid_messages[i]["timestamp"]
+        gap = (curr_ts - prev_ts).total_seconds()
+        if gap > gap_threshold:
+            sessions.append(current)
+            current = [valid_messages[i]]
         else:
-            gap = (msg["timestamp"] - messages[i-1]["timestamp"]).total_seconds()
-            if gap > gap_threshold:
-                sessions.append(current)
-                current = [msg]
-            else:
-                current.append(msg)
+            current.append(valid_messages[i])
     if current:
         sessions.append(current)
     return sessions
@@ -324,6 +339,8 @@ def extract_journeys_from_session(session, file_name):
                 if pointer < len(texts):
                     journey_record["cp_rera_info"] = texts[pointer]
                     pointer += 1
+        elif flow == "TalkToExpert":
+            journey_record["message"] = texts[pointer] if pointer < len(texts) else ""
         if pointer < len(texts):
             journey_record["extra_responses"] = "; ".join(texts[pointer:])
         journeys.append(journey_record)
@@ -347,7 +364,7 @@ def process_file(file_path):
     
     sessions = split_sessions(messages)
     
-    # Hold the last session if its last message is less than 7 minutes old
+    # Hold the last session if its last message is less than 7 minutes old.
     now = pd.Timestamp.now()
     threshold = now - pd.Timedelta(minutes=7)
     complete_sessions = []
@@ -379,7 +396,7 @@ def process_file(file_path):
     except Exception as e:
         print(f"Error writing offset file {offset_file}: {e}", flush=True)
     
-    # Extract mobile number from the file name (remove any .done suffix)
+    # Extract mobile number from file name (remove any .done suffix)
     base_name = os.path.basename(file_path).replace(".done", "")
     mobile = base_name.replace(".txt", "")
     for rec in file_records:
@@ -398,6 +415,7 @@ def process_all_files():
     return all_records
 
 def post_journey_to_apps_script(journey):
+    # Convert any Timestamp/datetime objects to ISO strings.
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
