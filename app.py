@@ -9,7 +9,7 @@ from rentmax_analysis import process_all_files, post_journey_to_apps_script
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Directory for logs (e.g., mounted persistent disk folder)
+# Use the environment variable for the log folder (e.g. a persistent disk folder)
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
@@ -38,11 +38,12 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
+    # Use operatorName if owner is true; otherwise senderName
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # Write to a single file per mobile number (e.g., "918770261448.txt")
+    # Append the log to a single file per mobile number
     log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
     try:
         with open(log_file, "a", encoding="utf-8") as f:

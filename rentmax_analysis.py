@@ -6,12 +6,12 @@ import pandas as pd
 import numpy as np
 import requests
 
-# Directory where the chat log files are stored (set via environment variable, e.g., "/data/logs")
+# Directory where log files are stored (should match LOG_FOLDER in app.py)
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
 ##########################################################
-# HELPER / FLOW-SPECIFIC LOGIC (for reference)
+# (Flow column definitions for reference – unchanged)
 ##########################################################
 COMMON_COLS = [
     "file", "username", "flow", "journey_start", "journey_end",
@@ -66,9 +66,6 @@ FLOW_COLUMNS = {
     ]
 }
 
-##########################################################
-# HELPER FUNCTIONS
-##########################################################
 def remove_emoji(text):
     if not isinstance(text, str):
         return text
@@ -89,10 +86,6 @@ def filter_greetings(msgs):
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file_from_offset(file_path, offset):
-    """
-    Reads a log file starting from a given offset (line number)
-    and returns a list of messages plus the new offset.
-    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     current_line = 0
@@ -324,32 +317,10 @@ def extract_journeys_from_session(session, file_name):
         journeys.append(journey_record)
     return journeys
 
-def parse_file_name(file_name):
-    """
-    Given a file name (e.g., "918770261448.txt" or "918770261448.txt.done"),
-    extract the mobile number and number of attempts.
-    If there is an underscore, the part after it (before .txt) is the attempt number.
-    Otherwise, attempt number is 1.
-    """
-    # Remove .done if present, then .txt
-    base = file_name.replace(".done", "")
-    if base.endswith(".txt"):
-        base = base[:-4]
-    parts = base.split("_")
-    if len(parts) == 1:
-        return parts[0], 1
-    else:
-        try:
-            attempt = int(parts[1])
-        except Exception:
-            attempt = 1
-        return parts[0], attempt
-
 def process_file(file_path):
     offset_file = file_path + ".offset"
     start_line = 0
     journey_count = 0
-    # Load existing offset info if present
     if os.path.exists(offset_file):
         try:
             with open(offset_file, "r") as f:
@@ -362,28 +333,45 @@ def process_file(file_path):
     if not messages:
         return []
     sessions = split_sessions(messages)
+    # Determine current time and a threshold of 7 minutes ago
+    now = pd.Timestamp.now()
+    threshold = now - pd.Timedelta(minutes=7)
+    complete_sessions = []
+    incomplete_session = None
+    if sessions:
+        # Process all sessions except possibly the last one
+        for s in sessions[:-1]:
+            complete_sessions.append(s)
+        # Check the last session: if its last message timestamp is older than threshold, include it; otherwise, skip it
+        last_session = sessions[-1]
+        if last_session and last_session[-1]["timestamp"] <= threshold:
+            complete_sessions.append(last_session)
+        else:
+            incomplete_session = last_session
     file_records = []
+    lines_processed = 0
     new_journeys = 0
-    for session in sessions:
+    for session in complete_sessions:
         recs = extract_journeys_from_session(session, os.path.basename(file_path))
         if recs:
             new_journeys += len(recs)
             file_records.extend(recs)
-    # Update offset file with new offset and total journey count
+        lines_processed += len(session)
+    # Update offset only up to the end of the last complete session
+    final_offset = start_line + lines_processed
     journey_count += new_journeys
-    offset_info = {"line_offset": new_offset, "journey_count": journey_count}
+    offset_info = {"line_offset": final_offset, "journey_count": journey_count}
     try:
         with open(offset_file, "w") as f:
             json.dump(offset_info, f)
     except Exception as e:
         print(f"Error writing offset file {offset_file}: {e}", flush=True)
-    # For each journey, add mobile_number and no_of_attempts.
+    # Extract mobile number from the file name (remove .txt and any .done suffix)
+    base_name = os.path.basename(file_path).replace(".done", "")
+    mobile = base_name.replace(".txt", "")
     for rec in file_records:
-        mobile, attempt = parse_file_name(rec.get("file", "unknown.txt"))
-        # Here, you can decide: if the file is being appended to, use the updated journey_count.
-        # For simplicity, we use the attempt extracted from the file name.
         rec["mobile_number"] = mobile
-        rec["no_of_attempts"] = attempt
+        rec["no_of_attempts"] = journey_count
     return file_records
 
 def process_all_files():
