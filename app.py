@@ -2,17 +2,16 @@ import os
 import time
 import sys
 import logging
+import glob
+import re
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
-
-# Import log processing functions from rentmax_analysis.py
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
 
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Environment variables and defaults:
-# LOG_FOLDER should be set to your persistent disk path (e.g., "/data/logs")
+# Environment variable for log folder (set to your persistent disk folder, e.g., "/data/logs")
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
@@ -41,11 +40,23 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
+    # Use operatorName if owner==True; else senderName
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
+    # New file-naming logic: base filename is <wa_id>.txt.
+    # If it exists, create a new file with an incremented counter.
+    base_filename = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
+    if not os.path.exists(base_filename):
+        log_file = base_filename
+    else:
+        pattern = os.path.join(LOG_FOLDER, f"{wa_id}_*.txt")
+        matching_files = glob.glob(pattern)
+        # Base file is attempt 1; so next is len(matching_files)+2
+        attempt = len(matching_files) + 2
+        log_file = os.path.join(LOG_FOLDER, f"{wa_id}_{attempt}.txt")
+
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
@@ -67,28 +78,12 @@ def process_logs():
         post_journey_to_apps_script(journey)
     app.logger.info("Finished processing logs.")
 
-def start_scheduler():
+if __name__ == "__main__":
+    # Start APScheduler to run process_logs every 1 minute (adjust as needed)
     scheduler = BackgroundScheduler()
-    # For testing, run every 1 minute; adjust to 30 minutes for production.
     scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
     scheduler.start()
     try:
-        while True:
-            time.sleep(60)
+        app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
     except (KeyboardInterrupt, SystemExit):
         scheduler.shutdown()
-
-if __name__ == "__main__":
-    # For a combined single-process approach, run both Flask and the scheduler.
-    # If you want to run just the scheduler, you can pass "--scheduler-only" as a command-line argument.
-    if "--scheduler-only" in sys.argv:
-        start_scheduler()
-    else:
-        # Running in combined mode: start scheduler in a separate thread and run Flask.
-        scheduler = BackgroundScheduler()
-        scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
-        scheduler.start()
-        try:
-            app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
-        except (KeyboardInterrupt, SystemExit):
-            scheduler.shutdown()
