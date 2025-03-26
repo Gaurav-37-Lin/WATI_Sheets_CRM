@@ -2,8 +2,6 @@ import os
 import time
 import sys
 import logging
-import glob
-import re
 from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
@@ -11,7 +9,7 @@ from rentmax_analysis import process_all_files, post_journey_to_apps_script
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Environment variable for log folder (set to your persistent disk folder, e.g., "/data/logs")
+# Directory for logs (e.g., mounted persistent disk folder)
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 
@@ -40,23 +38,12 @@ def wati_webhook():
     except Exception:
         time_str = str(raw_ts)
 
-    # Use operatorName if owner==True; else senderName
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # New file-naming logic: base filename is <wa_id>.txt.
-    # If it exists, create a new file with an incremented counter.
-    base_filename = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
-    if not os.path.exists(base_filename):
-        log_file = base_filename
-    else:
-        pattern = os.path.join(LOG_FOLDER, f"{wa_id}_*.txt")
-        matching_files = glob.glob(pattern)
-        # Base file is attempt 1; so next is len(matching_files)+2
-        attempt = len(matching_files) + 2
-        log_file = os.path.join(LOG_FOLDER, f"{wa_id}_{attempt}.txt")
-
+    # Write to a single file per mobile number (e.g., "918770261448.txt")
+    log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
             f.write(log_line + "\n")
@@ -79,7 +66,6 @@ def process_logs():
     app.logger.info("Finished processing logs.")
 
 if __name__ == "__main__":
-    # Start APScheduler to run process_logs every 1 minute (adjust as needed)
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
     scheduler.start()
