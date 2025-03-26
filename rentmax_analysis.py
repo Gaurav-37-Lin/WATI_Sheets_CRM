@@ -94,13 +94,13 @@ def parse_chat_file_from_offset(file_path, offset):
     Reads the log file starting from the given offset (line number)
     and returns a list of messages plus the new offset (total lines read).
 
-    UPDATED: Converts the raw timestamp (a string in "YYYY-MM-DD HH:MM:SS" format)
-    into a timezone-aware timestamp in Asia/Kolkata. Assumes the raw string is in UTC.
+    Assumes raw timestamp is a string like "YYYY-MM-DD HH:MM:SS".
+    If the parsed timestamp is naive, it is localized to UTC and then converted to IST.
     """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     current_line = 0
-    with open(file_path, 'r', encoding='utf-8') as f:
+    with open(file_path, 'r', encoding="utf-8") as f:
         for line in f:
             if current_line < offset:
                 current_line += 1
@@ -112,15 +112,23 @@ def parse_chat_file_from_offset(file_path, offset):
             m = re.match(pattern, line)
             if m:
                 raw_ts, sender, text = m.groups()
+                ts = None
                 try:
-                    # Parse the timestamp string
+                    # Parse raw_ts as a datetime string
                     ts = pd.to_datetime(raw_ts)
-                    # If naive, assume UTC and convert to Asia/Kolkata
+                    # If the timestamp is naive, assume it is in UTC and convert to IST
                     if ts.tzinfo is None:
                         ts = ts.tz_localize('UTC').tz_convert('Asia/Kolkata')
                 except Exception as e:
                     print(f"Timestamp conversion failed for value '{raw_ts}': {e}", flush=True)
-                    ts = None
+                    try:
+                        ts = pd.to_datetime(raw_ts)
+                        if ts.tzinfo is None:
+                            ts = ts.tz_localize('UTC').tz_convert('Asia/Kolkata')
+                        print(f"Fallback conversion succeeded for value '{raw_ts}': {ts}", flush=True)
+                    except Exception as e2:
+                        print(f"Fallback conversion also failed for value '{raw_ts}': {e2}", flush=True)
+                        ts = None
                 messages.append({
                     "timestamp": ts,
                     "sender": sender.strip(),
@@ -132,7 +140,7 @@ def parse_chat_file_from_offset(file_path, offset):
 def split_sessions(messages, gap_threshold=600):
     """
     Splits messages into sessions.
-    Filters out messages with invalid (None) timestamps.
+    Filters out any messages that have an invalid timestamp.
     """
     valid_messages = [msg for msg in messages if msg["timestamp"] is not None]
     if not valid_messages:
@@ -230,7 +238,7 @@ def extract_journeys_from_session(session, file_name):
 
         pointer = 2
         if flow == "TalkToExpert":
-            journey_record["message"] = "Talk to Expert selected"
+            journey_record["message"] = texts[pointer] if pointer < len(texts) else ""
         elif flow == "RentTenant":
             if pointer < len(texts):
                 journey_record["rent_tenant_btn_city"] = texts[pointer]
@@ -361,7 +369,7 @@ def process_file(file_path):
     sessions = split_sessions(messages)
     
     # Hold the last session if its last message is less than 7 minutes old.
-    now = pd.Timestamp.now()
+    now = pd.Timestamp.now(tz='Asia/Kolkata')
     threshold = now - pd.Timedelta(minutes=7)
     complete_sessions = []
     for i, session in enumerate(sessions):
@@ -411,6 +419,7 @@ def process_all_files():
     return all_records
 
 def post_journey_to_apps_script(journey):
+    # Convert any Timestamp/datetime objects to ISO strings.
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
