@@ -5,13 +5,14 @@ import pandas as pd
 import numpy as np
 import requests
 
-# Where your webhook writes .txt logs
+# Environment variables:
+# LOG_FOLDER: where your .txt logs are stored (e.g., "/data/logs")
+# APPS_SCRIPT_URL: your deployed Apps Script Web App endpoint
 CHAT_FOLDER = os.environ.get("LOG_FOLDER", "logs")
-# The URL for your deployed Apps Script Web App
 APPS_SCRIPT_URL = os.environ.get("APPS_SCRIPT_URL", "")
 
 ##########################################################
-# FLOW-SPECIFIC COLUMN FILTERING (for reference)
+# FLOW-SPECIFIC COLUMN FILTERING (REFERENCE ONLY)
 ##########################################################
 COMMON_COLS = [
     "file", "username", "flow", "journey_start", "journey_end",
@@ -89,6 +90,9 @@ def filter_greetings(msgs):
     return [msg for msg in msgs if not is_greeting(msg)]
 
 def parse_chat_file(file_path):
+    """
+    Reads lines like: [YYYY-MM-DD HH:MM:SS] Sender: Message
+    """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
     messages = []
     with open(file_path, 'r', encoding='utf-8') as f:
@@ -111,6 +115,9 @@ def parse_chat_file(file_path):
     return messages
 
 def split_sessions(messages, gap_threshold=600):
+    """
+    Splits messages into sessions if a gap > gap_threshold seconds (default=600).
+    """
     sessions = []
     current = []
     for i, msg in enumerate(messages):
@@ -168,9 +175,12 @@ def extract_valid_response(texts, start_index, validate_func):
 # JOURNEY EXTRACTION
 ##########################################################
 def extract_journeys_from_session(session, file_name):
+    """
+    Identifies "How can we assist you today?" as the journey start,
+    extracts user messages (non-bot), and maps them to flow-specific fields.
+    """
     journeys = []
     journey_start_indices = []
-    # Look for the Bot prompt
     for idx, msg in enumerate(session):
         if msg["sender"].lower() == "bot" and "how can we assist you today" in msg["message"].lower():
             journey_start_indices.append(idx)
@@ -184,9 +194,9 @@ def extract_journeys_from_session(session, file_name):
         non_bot = [msg for msg in segment_msgs if msg["sender"].lower() != "bot"]
         if not non_bot:
             continue
-        texts = [remove_emoji(msg["message"]).strip() for msg in non_bot]
+        texts = [remove_emoji(m["message"]).strip() for m in non_bot]
         texts = filter_greetings(texts)
-        # For testing, require at least 1 user message
+        # For demonstration, require at least 1 user message
         if len(texts) < 1:
             continue
 
@@ -333,13 +343,27 @@ def process_file(file_path):
     return file_records
 
 def process_all_files():
+    """
+    Processes all .txt files in CHAT_FOLDER, then renames them to .done
+    so they won't be re-processed next time, preventing duplicate rows.
+    """
     all_records = []
+    # Only process *.txt, skip any *.done
     file_paths = glob.glob(os.path.join(CHAT_FOLDER, "*.txt"))
     print("DEBUG: Searching for .txt files in:", os.path.abspath(CHAT_FOLDER), flush=True)
     print("DEBUG: Found files:", file_paths, flush=True)
+
     for file_path in file_paths:
         recs = process_file(file_path)
         all_records.extend(recs)
+        # Rename the file to mark it processed
+        done_path = file_path + ".done"
+        try:
+            os.rename(file_path, done_path)
+            print(f"Renamed {file_path} to {done_path}")
+        except Exception as e:
+            print(f"Error renaming {file_path}: {e}")
+
     return all_records
 
 ##########################################################
@@ -348,9 +372,8 @@ def process_all_files():
 def post_journey_to_apps_script(journey):
     """
     Sends one journey dict as JSON to the Apps Script Web App endpoint.
-    Converts timestamps to ISO strings to avoid JSON serialization errors.
+    Convert timestamps to ISO strings to avoid JSON serialization issues.
     """
-    # Convert any Timestamp/datetime objects to ISO format strings
     for key, value in journey.items():
         if hasattr(value, "isoformat"):
             journey[key] = value.isoformat()
@@ -375,6 +398,9 @@ def post_journey_to_apps_script(journey):
         print(f"Exception posting to Apps Script: {e}", flush=True)
 
 def main():
+    """
+    For local or manual invocation: processes all files, sends each journey to Apps Script.
+    """
     records = process_all_files()
     print("DEBUG: Total records extracted:", len(records), flush=True)
     for journey in records:
