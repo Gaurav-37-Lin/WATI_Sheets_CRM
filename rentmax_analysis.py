@@ -94,7 +94,7 @@ def parse_chat_file_from_offset(file_path, offset):
     Reads the log file starting from the given offset (line number)
     and returns a list of messages plus the new offset (total lines read).
 
-    Assumes raw timestamp is a string like "YYYY-MM-DD HH:MM:SS".
+    Assumes raw timestamp is a string in "YYYY-MM-DD HH:MM:SS" format.
     If the parsed timestamp is naive, it is localized to UTC and then converted to IST.
     """
     pattern = r"\[(.*?)\]\s(.*?):\s(.*)"
@@ -116,7 +116,7 @@ def parse_chat_file_from_offset(file_path, offset):
                 try:
                     # Parse raw_ts as a datetime string
                     ts = pd.to_datetime(raw_ts)
-                    # If the timestamp is naive, assume it is in UTC and convert to IST
+                    # If the timestamp is naive, assume it is in UTC and convert to IST.
                     if ts.tzinfo is None:
                         ts = ts.tz_localize('UTC').tz_convert('Asia/Kolkata')
                 except Exception as e:
@@ -419,10 +419,11 @@ def process_all_files():
     return all_records
 
 def post_journey_to_apps_script(journey):
-    # Convert any Timestamp/datetime objects to ISO strings.
+    # Convert any Timestamp/datetime objects to a string format recognized by Google Sheets.
+    # Format: "YYYY-MM-DD HH:MM:SS"
     for key, value in journey.items():
-        if hasattr(value, "isoformat"):
-            journey[key] = value.isoformat()
+        if hasattr(value, "strftime"):
+            journey[key] = value.strftime('%Y-%m-%d %H:%M:%S')
     try:
         response = requests.post(APPS_SCRIPT_URL, json=journey, timeout=10)
         print("Response status code:", response.status_code, flush=True)
