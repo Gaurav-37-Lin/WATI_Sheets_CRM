@@ -1,4 +1,89 @@
 import os
+import requests
+import json
+
+def get_zoho_access_token():
+    """
+    Uses the refresh token to obtain a new access token from Zoho.
+    Make sure the following environment variables are set on Render:
+      - ZOHO_CLIENT_ID
+      - ZOHO_CLIENT_SECRET
+      - ZOHO_REFRESH_TOKEN
+    """
+    data = {
+        "refresh_token": os.environ.get("ZOHO_REFRESH_TOKEN"),
+        "client_id": os.environ.get("ZOHO_CLIENT_ID"),
+        "client_secret": os.environ.get("ZOHO_CLIENT_SECRET"),
+        "grant_type": "refresh_token"
+    }
+    # Use the proper endpoint based on your region. Here, we use the India data center.
+    token_url = "https://accounts.zoho.in/oauth/v2/token"
+    response = requests.post(token_url, data=data)
+    if response.status_code == 200:
+        token_data = response.json()
+        access_token = token_data.get("access_token")
+        if access_token:
+            print("Obtained new Zoho access token.", flush=True)
+            return access_token
+        else:
+            print("Access token not found in response:", token_data, flush=True)
+            return None
+    else:
+        print("Failed to refresh token:", response.status_code, response.text, flush=True)
+        return None
+
+def push_to_zoho_crm(journey):
+    """
+    Pushes a journey record to Zoho CRM as a new Lead.
+    The function first obtains a fresh access token using the refresh token.
+    Adjust the field mapping as needed.
+    """
+    access_token = get_zoho_access_token()
+    if not access_token:
+        print("Cannot push to Zoho CRM without a valid access token.", flush=True)
+        return
+
+    headers = {
+        "Authorization": "Zoho-oauthtoken " + access_token,
+        "Content-Type": "application/json"
+    }
+    
+    # Map your journey data to Zoho CRM Lead fields.
+    # Adjust these field names to match your Zoho CRM configuration.
+    lead_data = {
+        "data": [{
+            "Last_Name": journey.get("username", "Unknown"),
+            "Phone": journey.get("mobile_number", ""),
+            "Lead_Source": "WATI Chatbot",
+            # You can store a summary or the full JSON in a description field.
+            "Description": json.dumps(journey)
+        }]
+    }
+    
+    # For Zoho CRM in India, use the .in endpoint.
+    create_url = "https://www.zohoapis.in/crm/v2/Leads"
+    
+    try:
+        response = requests.post(create_url, headers=headers, json=lead_data, timeout=10)
+        print("Zoho CRM response:", response.status_code, response.text, flush=True)
+    except Exception as e:
+        print("Exception while pushing to Zoho CRM:", e, flush=True)
+
+# Example of integrating this into your existing main process:
+def main():
+    # Assume you have a function process_all_files() that returns journey records.
+    from rentmax_analysis import process_all_files  # if not already imported
+    records = process_all_files()
+    print("DEBUG: Total records extracted:", len(records), flush=True)
+    for journey in records:
+        # Push to Google Sheets if you already have that function:
+        # post_journey_to_apps_script(journey)
+        # Now, push the record to Zoho CRM:
+        push_to_zoho_crm(journey)
+
+if __name__ == "__main__":
+    main()
+import os
 import time
 import sys
 import logging
