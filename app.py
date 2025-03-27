@@ -16,11 +16,11 @@ os.makedirs(LOG_FOLDER, exist_ok=True)
 
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
-# Zoho OAuth credentials (if you decide to set up OAuth with Zoho)
+# Zoho OAuth credentials (India data center)
 ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
-ZOHO_REDIRECT_URI = os.environ.get("ZOHO_REDIRECT_URI")  # e.g., "https://your-app.onrender.com/oauth/callback"
-# (You might also use a refresh token flow later; this example shows the basic authorization code exchange.)
+ZOHO_REDIRECT_URI = os.environ.get("ZOHO_REDIRECT_URI")  
+# e.g. "https://wati-sheets-crm.onrender.com/oauth/callback"
 
 @app.route("/")
 def index():
@@ -65,7 +65,7 @@ def wati_webhook():
 @app.route("/oauth/callback")
 def oauth_callback():
     """
-    This endpoint handles the OAuth callback from Zoho.
+    This endpoint handles the OAuth callback from Zoho (India data center).
     Zoho will redirect to this URL with a 'code' query parameter.
     The code is exchanged for an access token.
     """
@@ -74,7 +74,8 @@ def oauth_callback():
     if not code:
         return "Error: No authorization code provided.", 400
 
-    token_url = "https://accounts.zoho.com/oauth/v2/token"
+    # Because you're on .in data center, use the .in domain:
+    token_url = "https://accounts.zoho.in/oauth/v2/token"
     payload = {
         "code": code,
         "client_id": ZOHO_CLIENT_ID,
@@ -85,7 +86,7 @@ def oauth_callback():
     response = requests.post(token_url, data=payload)
     if response.status_code == 200:
         token_data = response.json()
-        # For production, store token_data securely.
+        # For production, store token_data securely (e.g., refresh_token).
         return jsonify({
             "message": "OAuth callback successful. Tokens received.",
             "token_data": token_data,
