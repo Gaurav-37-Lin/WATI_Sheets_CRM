@@ -2,7 +2,7 @@ import os
 import time
 import sys
 import logging
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from rentmax_analysis import process_all_files, post_journey_to_apps_script
 import requests
@@ -12,42 +12,56 @@ import pandas as pd
 app = Flask(__name__)
 logging.basicConfig(level=logging.INFO)
 
-# Set up environment variables and directories.
-# LOG_FOLDER: Folder for log files (should be persistent on Render).
-# WATI_WEBHOOK_TOKEN: Token to verify incoming webhook requests.
+############################################
+# Environment Variables for Zoho Credentials
+############################################
 LOG_FOLDER = os.environ.get("LOG_FOLDER", "logs")
 os.makedirs(LOG_FOLDER, exist_ok=True)
 WEBHOOK_TOKEN = os.environ.get("WATI_WEBHOOK_TOKEN", "default_token")
 
-# Zoho OAuth and API credentials (for the India data center).
+# Zoho OAuth & API credentials (for India data center)
 ZOHO_CLIENT_ID = os.environ.get("ZOHO_CLIENT_ID")
 ZOHO_CLIENT_SECRET = os.environ.get("ZOHO_CLIENT_SECRET")
-ZOHO_REDIRECT_URI = os.environ.get("ZOHO_REDIRECT_URI")  # e.g., "https://wati-sheets-crm.onrender.com/oauth/callback"
+ZOHO_REDIRECT_URI = os.environ.get("ZOHO_REDIRECT_URI")  # e.g. "https://wati-sheets-crm.onrender.com/oauth/callback"
 ZOHO_REFRESH_TOKEN = os.environ.get("ZOHO_REFRESH_TOKEN")
 
 ############################################
-# Basic Endpoints
+# Hardcoded Zoho Field API Keys
+############################################
+# Make sure these match exactly the API names in your Zoho CRM Leads module.
+JOURNEY_ATTEMPTS_FIELD = "Journey_Attempts"
+RENT_TENANT_CITY_FIELD = "Rent_Tenant_City"
+RENT_TENANT_CONFIG_FIELD = "Rent_Tenant_Configuration"
+RENT_TENANT_CONFIG_MORE_FIELD = "Rent_Tenant_Configuration_More"
+RENT_TENANT_LOCALITY_FIELD = "Rent_Tenant_Locality"
+RENT_TENANT_BUDGET_WRONG_FIELD = "Rent_Tenant_Budget_Wrong"
+RENT_TENANT_BUDGET_CORRECT_FIELD = "Rent_Tenant_Budget_Correct"
+RENT_TENANT_EMAIL_FIELD = "Rent_Tenant_Email"
+RENT_TENANT_EST_MOVE_IN_FIELD = "Rent_Tenant_Est_Move_In"
+# If you have additional fields like "Intro_Selection" or "Main_Selection", you can define them here:
+# INTRO_SELECTION_FIELD = "Intro_Selection"
+# MAIN_SELECTION_FIELD = "Main_Selection"
+
+############################################
+# Flask Endpoints
 ############################################
 
 @app.route("/")
 def index():
-    """
-    Root endpoint: returns a status message and shows where log files are stored.
-    """
+    """Returns a status message and shows the log folder location."""
     abs_log_path = os.path.abspath(LOG_FOLDER)
     return f"Webhook is running. Log files are stored in: {abs_log_path}"
 
 @app.route("/wati-webhook", methods=["POST"])
 def wati_webhook():
     """
-    Webhook endpoint to receive data from WATI.
-    Validates the token, parses the JSON payload, and appends the message to a log file.
+    Receives webhook data from WATI, verifies the token, and appends the log line
+    to a file named after the mobile number (waId).
     """
     token = request.args.get("token")
     if token != WEBHOOK_TOKEN:
         return jsonify({"status": "forbidden"}), 403
 
-    # Try to parse the JSON payload.
     try:
         data = request.get_json(force=True)
     except Exception as e:
@@ -57,23 +71,18 @@ def wati_webhook():
     if not data:
         return jsonify({"status": "no data"}), 400
 
-    # Extract WhatsApp ID and timestamp from the payload.
     wa_id = data.get("waId", "unknown")
     raw_ts = data.get("timestamp", "")
     try:
-        # Try to interpret raw_ts as an epoch value.
         epoch_ts = int(raw_ts)
         time_str = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(epoch_ts))
     except Exception:
-        # Fallback: use the raw timestamp string.
         time_str = str(raw_ts)
 
-    # Determine the sender name: if 'owner' is True, use operatorName; otherwise use senderName.
     sender_name = data.get("operatorName", "Bot") if data.get("owner") else data.get("senderName", "User")
     text = data.get("text", "")
     log_line = f"[{time_str}] {sender_name}: {text}"
 
-    # Determine the log file path based on the WhatsApp ID.
     log_file = os.path.join(LOG_FOLDER, f"{wa_id}.txt")
     try:
         with open(log_file, "a", encoding="utf-8") as f:
@@ -85,22 +94,17 @@ def wati_webhook():
     app.logger.info("WATI Webhook data received: %s", data)
     return jsonify({"status": "received"}), 200
 
-############################################
-# OAuth Callback Endpoint for Zoho
-############################################
-
 @app.route("/oauth/callback")
 def oauth_callback():
     """
-    OAuth callback endpoint that handles the redirect from Zoho.
-    It expects a 'code' parameter in the query string and exchanges it for an access token.
+    Handles the OAuth callback from Zoho.
+    Expects a 'code' parameter and exchanges it for an access token.
     """
     code = request.args.get("code")
     state = request.args.get("state")
     if not code:
         return "Error: No authorization code provided.", 400
 
-    # Use Zoho India endpoint for token exchange.
     token_url = "https://accounts.zoho.in/oauth/v2/token"
     payload = {
         "code": code,
@@ -121,8 +125,7 @@ def oauth_callback():
         except Exception as e:
             app.logger.error("Failed to parse token exchange response: %s", e)
             return f"Failed to parse token exchange response: {e}", 500
-
-        # In production, store token_data (access token, refresh token) securely.
+        # In production, store token_data securely (access token, refresh token, etc.).
         return jsonify({
             "message": "OAuth callback successful. Tokens received.",
             "token_data": token_data,
@@ -133,13 +136,13 @@ def oauth_callback():
         return f"Token exchange failed: {response.text}", response.status_code
 
 ############################################
-# Zoho Token Refresh and CRM Integration
+# Zoho Token Refresh and CRM Update
 ############################################
 
 def get_zoho_access_token():
     """
-    Refreshes the Zoho access token using the refresh token.
-    Returns a new access token or None if the refresh fails.
+    Uses the refresh token to obtain a new access token from Zoho.
+    Returns the new access token or None if the refresh fails.
     """
     data = {
         "refresh_token": ZOHO_REFRESH_TOKEN,
@@ -171,36 +174,71 @@ def get_zoho_access_token():
         app.logger.error("Failed to refresh token: %s", response.text)
         return None
 
-def push_to_zoho_crm(journey):
+def update_zoho_crm(journey):
     """
-    Pushes a journey record to Zoho CRM as a new Lead.
-    This function first refreshes the access token, then maps the journey data to Zoho fields,
-    and finally posts it to the Zoho CRM Leads endpoint.
+    Searches for an existing lead in Zoho CRM using two criteria:
+      - Mobile == journey's mobile_number
+      - Lead_Source == "WATI"
+    If found, updates only the specified fields (hardcoded field API names below).
+    Does NOT update Mobile or Lead_Source.
     """
+    mobile = journey.get("mobile_number")
+    if not mobile:
+        app.logger.error("No mobile number found in journey; cannot update Zoho CRM.")
+        return
+
     access_token = get_zoho_access_token()
     if not access_token:
-        app.logger.error("Cannot push to Zoho CRM without a valid access token.")
+        app.logger.error("Cannot update Zoho CRM without a valid access token.")
         return
 
     headers = {
         "Authorization": "Zoho-oauthtoken " + access_token,
         "Content-Type": "application/json"
     }
-    # Map journey record to Zoho CRM Lead fields. Adjust as needed.
-    lead_data = {
-        "data": [{
-            "Last_Name": journey.get("username", "Unknown"),
-            "Phone": journey.get("mobile_number", ""),
-            "Lead_Source": "WATI Chatbot",
-            "Description": json.dumps(journey)  # Store full journey details; customize as needed.
-        }]
-    }
-    create_url = "https://www.zohoapis.in/crm/v2/Leads"
+    # Search for a lead where Mobile == journey.mobile_number AND Lead_Source == "WATI"
+    criteria = f"((Mobile:equals:{mobile}) and (Lead_Source:equals:WATI))"
+    search_url = f"https://www.zohoapis.in/crm/v2/Leads/search?criteria={criteria}"
     try:
-        response = requests.post(create_url, headers=headers, json=lead_data, timeout=10)
-        app.logger.info("Zoho CRM response: %s %s", response.status_code, response.text)
+        search_response = requests.get(search_url, headers=headers, timeout=10)
     except Exception as e:
-        app.logger.error("Exception while pushing to Zoho CRM: %s", e)
+        app.logger.error("Exception during Zoho CRM search: %s", e)
+        return
+
+    if search_response.status_code == 200:
+        search_data = search_response.json()
+        if "data" in search_data and len(search_data["data"]) > 0:
+            record_id = search_data["data"][0].get("id")
+            # Hardcode the mapping from journey dict -> Zoho CRM fields:
+            update_payload = {
+                "data": [{
+                    JOURNEY_ATTEMPTS_FIELD: journey.get("journey_attempts"),
+                    RENT_TENANT_CITY_FIELD: journey.get("rent_tenant_btn_city"),
+                    RENT_TENANT_CONFIG_FIELD: journey.get("rent_tenant_btn_configuration"),
+                    RENT_TENANT_CONFIG_MORE_FIELD: journey.get("rent_tenant_btn_configuration_more"),
+                    RENT_TENANT_LOCALITY_FIELD: journey.get("rent_tenant_txt_locality"),
+                    RENT_TENANT_BUDGET_WRONG_FIELD: journey.get("rent_tenant_txt_budget_wrong"),
+                    RENT_TENANT_BUDGET_CORRECT_FIELD: journey.get("rent_tenant_txt_budget_correct"),
+                    RENT_TENANT_EMAIL_FIELD: journey.get("rent_tenant_txt_email"),
+                    RENT_TENANT_EST_MOVE_IN_FIELD: journey.get("rent_tenant_btn_est_move_in")
+                    # Add more fields if needed, e.g.:
+                    # "Intro_Selection": journey.get("intro_selection"),
+                    # "Main_Selection": journey.get("main_selection"),
+                }]
+            }
+            update_url = f"https://www.zohoapis.in/crm/v2/Leads/{record_id}"
+            try:
+                update_response = requests.put(update_url, headers=headers, json=update_payload, timeout=10)
+                if update_response.status_code in [200, 201]:
+                    app.logger.info("Successfully updated lead for mobile %s", mobile)
+                else:
+                    app.logger.error("Failed to update lead for mobile %s: %s", mobile, update_response.text)
+            except Exception as e:
+                app.logger.error("Exception during update call for mobile %s: %s", mobile, e)
+        else:
+            app.logger.info("No existing lead found for mobile %s with Lead_Source=WATI. Not creating a new entry.", mobile)
+    else:
+        app.logger.error("Error searching for lead with mobile %s: %s", mobile, search_response.text)
 
 ############################################
 # Scheduled Log Processing
@@ -209,12 +247,12 @@ def push_to_zoho_crm(journey):
 def process_logs():
     """
     Scheduled job that processes log files, extracts journey records,
-    and pushes them to Google Sheets and Zoho CRM.
+    posts them to Google Sheets, and updates existing leads in Zoho CRM.
     """
     app.logger.info("Starting scheduled log processing...")
     abs_log_path = os.path.abspath(LOG_FOLDER)
     app.logger.info("DEBUG: Searching for .txt files in: %s", abs_log_path)
-    
+
     try:
         records = process_all_files()
     except Exception as e:
@@ -226,16 +264,16 @@ def process_logs():
         app.logger.warning("No journeys extracted. Check if the expected bot prompt is present in the logs.")
     
     for journey in records:
+        # 1) Post journey to Google Sheets
         try:
-            # Post journey to Google Sheets first (existing integration)
             post_journey_to_apps_script(journey)
         except Exception as e:
             app.logger.error("Error posting journey to Google Sheets: %s", e)
+        # 2) Update the existing lead in Zoho CRM
         try:
-            # Then push the journey to Zoho CRM.
-            push_to_zoho_crm(journey)
+            update_zoho_crm(journey)
         except Exception as e:
-            app.logger.error("Error pushing journey to Zoho CRM: %s", e)
+            app.logger.error("Error updating journey in Zoho CRM: %s", e)
     
     app.logger.info("Finished processing logs.")
 
@@ -244,7 +282,6 @@ def process_logs():
 ############################################
 
 if __name__ == "__main__":
-    # Set up a background scheduler to process logs every minute.
     scheduler = BackgroundScheduler()
     scheduler.add_job(func=process_logs, trigger="interval", minutes=1)
     scheduler.start()
